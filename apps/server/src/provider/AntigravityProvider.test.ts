@@ -1,3 +1,4 @@
+import { resolveAntigravityEffortModel } from "./acp/AntigravityAcpSupport.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -219,7 +220,6 @@ describe("Antigravity model catalog", () => {
     });
     expect(models.map((model) => model.slug)).toEqual([
       "gemini-3.7-flash-high",
-      "gemini-3.7-flash-medium",
       "gemini-pro-agent",
     ]);
     expect(models.find((model) => model.isDefault)?.slug).toBe("gemini-pro-agent");
@@ -460,7 +460,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       ];
       const nextSnapshot = yield* Stream.toPull(
         harness.provider.snapshot.streamChanges.pipe(
-          Stream.filter((snapshot) => snapshot.models.length === 3),
+          Stream.filter((snapshot) => snapshot.models.length === 1),
         ),
       );
       yield* harness.provider.onConfigOptionsUpdated(configOptions);
@@ -584,7 +584,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           status: "error",
           auth: { status: "authenticated" },
         });
-        expect(snapshot.models).toHaveLength(installed ? 11 : 0);
+        expect(snapshot.models).toHaveLength(installed ? 4 : 0);
         expect(snapshot.slashCommands).toHaveLength(installed ? 2 : 0);
         expect(snapshot.workspaceSnapshots).toHaveLength(installed ? 1 : 0);
         expect(snapshot.supportsTextGeneration).toBe(installed);
@@ -872,4 +872,46 @@ it.layer(makeLayerTest(true))("Antigravity periodic health checks", (it) => {
       expect(auth.at(-1)).toBe("unauthenticated");
     }),
   );
+});
+
+describe("Antigravity effort grouping", () => {
+  const options = [
+    { value: "gemini-4-argon-high", name: "Gemini 4 Argon (High)" },
+    { value: "gemini-4-argon-low", name: "Gemini 4 Argon (Low)" },
+    { value: "gemini-pro-agent", name: "Gemini 3.1 Pro (High)" },
+    { value: "gemini-3.1-pro-low", name: "Gemini 3.1 Pro (Low)" },
+    { value: "gemini-4-neon", name: "Gemini 4 Neon" },
+  ];
+  const configOptions = [{ ...modelConfig, currentValue: "gemini-4-neon", options }];
+
+  it("shows one model per family with an effort choice", () => {
+    const models = buildAntigravityModelsFromSession({ configOptions });
+    expect(models.map((model) => [model.slug, model.name])).toEqual([
+      ["gemini-4-argon-high", "Gemini 4 Argon"],
+      ["gemini-pro-agent", "Gemini 3.1 Pro"],
+      ["gemini-4-neon", "Gemini 4 Neon"],
+    ]);
+    const descriptor = models[0]?.capabilities?.optionDescriptors?.[0];
+    expect(descriptor?.id).toBe("effort");
+    expect(
+      descriptor?.type === "select" ? descriptor.options.map((option) => option.id) : [],
+    ).toEqual(["low", "high"]);
+    expect(models[1]?.aliases).toContain("gemini-3.1-pro-low");
+  });
+
+  it("resolves a grouped model and effort to the native model ID", () => {
+    expect(
+      resolveAntigravityEffortModel({ configOptions, model: "gemini-4-argon-high", effort: "low" }),
+    ).toBe("gemini-4-argon-low");
+    expect(
+      resolveAntigravityEffortModel({ configOptions, model: "gemini-pro-agent", effort: "low" }),
+    ).toBe("gemini-3.1-pro-low");
+    expect(
+      resolveAntigravityEffortModel({
+        configOptions,
+        model: "gemini-4-argon-high",
+        effort: undefined,
+      }),
+    ).toBe("gemini-4-argon-high");
+  });
 });

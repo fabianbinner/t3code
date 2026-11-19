@@ -10,6 +10,12 @@ import {
   type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
+import {
+  antigravityLevelLabel,
+  antigravityLevelRank,
+  antigravityThinkingConfig,
+  parseAntigravityEffortName,
+} from "./acp/AntigravityAcpSupport.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -39,8 +45,6 @@ import {
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
 import { resolveUsageLimitsAfterProbe } from "@t3tools/provider-core/server/usageLimits";
-
-import { antigravityThinkingConfig } from "./acp/AntigravityAcpSupport.ts";
 
 const EMPTY_MODEL_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAX_WORKSPACE_SNAPSHOTS = 32;
@@ -95,7 +99,7 @@ export function buildAntigravityModelsFromSession(
   const seen = new Set<string>();
   // The agent can list two IDs under one name; label the later ones so the picker tells them apart.
   const names = new Set<string>();
-  return entries.flatMap((entry): ServerProviderModel[] => {
+  const models = entries.flatMap((entry): ServerProviderModel[] => {
     if (!entry.value.trim() || seen.has(entry.value)) return [];
     seen.add(entry.value);
     const baseName = entry.name.trim() ? entry.name : entry.value;
@@ -115,6 +119,69 @@ export function buildAntigravityModelsFromSession(
           observed === undefined
             ? thinkingCapabilities(currentThinking, false)
             : thinkingCapabilities(observed, true),
+      },
+    ];
+  });
+  return groupAntigravityEffortModels(models);
+}
+
+/**
+ * The agent lists effort variants as separate models ("Gemini 4 Argon (High)",
+ * "Gemini 4 Argon (Low)"). Show one model with an effort choice instead; the
+ * adapter maps the choice back to the variant's ID.
+ */
+function groupAntigravityEffortModels(
+  models: ReadonlyArray<ServerProviderModel>,
+): ReadonlyArray<ServerProviderModel> {
+  const groups = new Map<string, Array<{ model: ServerProviderModel; level: string }>>();
+  for (const model of models) {
+    const parsed = parseAntigravityEffortName(model.name);
+    if (!parsed || (model.capabilities?.optionDescriptors?.length ?? 0) > 0) continue;
+    groups.set(parsed.base, [...(groups.get(parsed.base) ?? []), { model, level: parsed.level }]);
+  }
+  const emitted = new Set<string>();
+  return models.flatMap((model): ServerProviderModel[] => {
+    const parsed = parseAntigravityEffortName(model.name);
+    const members = parsed ? groups.get(parsed.base) : undefined;
+    if (!parsed || !members) return [model];
+    if (emitted.has(parsed.base)) return [];
+    emitted.add(parsed.base);
+    if (members.length < 2) return [model];
+    const sorted = members.toSorted(
+      (left, right) => antigravityLevelRank(left.level) - antigravityLevelRank(right.level),
+    );
+    const representative =
+      members.find((member) => member.model.isDefault) ??
+      sorted.find((member) => member.level === "high") ??
+      sorted[0]!;
+    const isDefault = members.some((member) => member.model.isDefault);
+    return [
+      {
+        slug: representative.model.slug,
+        name: parsed.base,
+        isCustom: false,
+        ...(isDefault ? { isDefault: true } : {}),
+        aliases: [
+          ...members
+            .map((member) => member.model.slug)
+            .filter((slug) => slug !== representative.model.slug),
+          ...(isDefault ? [ANTIGRAVITY_DEFAULT_MODEL] : []),
+        ],
+        capabilities: createModelCapabilities({
+          optionDescriptors: [
+            {
+              id: "effort",
+              label: "Effort",
+              type: "select",
+              options: sorted.map((member) => ({
+                id: member.level,
+                label: antigravityLevelLabel(member.level),
+                ...(member === representative ? { isDefault: true } : {}),
+              })),
+              currentValue: representative.level,
+            },
+          ],
+        }),
       },
     ];
   });

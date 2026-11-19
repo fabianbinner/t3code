@@ -223,6 +223,43 @@ export function antigravityModelOptions(
   return model.options.flatMap((entry) => ("value" in entry ? [entry] : entry.options));
 }
 
+const ANTIGRAVITY_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/** "Gemini 4 Argon (High)" -> { base: "Gemini 4 Argon", level: "high" }. */
+export function parseAntigravityEffortName(
+  name: string,
+): { readonly base: string; readonly level: string } | undefined {
+  const match = /^(.*\S)\s+\((low|medium|high|xhigh|max)\)$/i.exec(name.trim());
+  return match?.[1] && match[2] ? { base: match[1], level: match[2].toLowerCase() } : undefined;
+}
+
+export function antigravityLevelRank(level: string): number {
+  const index = ANTIGRAVITY_LEVELS.indexOf(level as (typeof ANTIGRAVITY_LEVELS)[number]);
+  return index === -1 ? ANTIGRAVITY_LEVELS.length : index;
+}
+
+export function antigravityLevelLabel(level: string): string {
+  return level === "xhigh" ? "Extra High" : level.charAt(0).toUpperCase() + level.slice(1);
+}
+
+/** The variant of a grouped model at the chosen effort, else the model itself. */
+export function resolveAntigravityEffortModel(input: {
+  readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  readonly model: string;
+  readonly effort: string | undefined;
+}): string {
+  if (!input.effort) return input.model;
+  const options = antigravityModelOptions(input.configOptions);
+  const base = options.find((option) => option.value === input.model);
+  const parsed = base ? parseAntigravityEffortName(base.name) : undefined;
+  if (!parsed) return input.model;
+  const match = options.find((option) => {
+    const other = parseAntigravityEffortName(option.name);
+    return other?.base === parsed.base && other.level === input.effort;
+  });
+  return match?.value ?? input.model;
+}
+
 /** Runtime 1.4 reports thinking as its own option; 1.3 encoded it in the model ID. */
 export function antigravityThinkingConfig(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
@@ -269,6 +306,8 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
       "getConfigOptions" | "setModel" | "setConfigOption"
     >;
     readonly model: string | null | undefined;
+    /** Effort level of a grouped model, e.g. "high". */
+    readonly effort?: string | undefined;
     readonly defaultModel?: string | undefined;
     readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
   }): Effect.fn.Return<string | undefined, E> {
@@ -277,7 +316,14 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
     const current = modelConfig?.type === "select" ? modelConfig.currentValue : undefined;
     const resolved = resolveAntigravityModel({
       configOptions,
-      model: input.model,
+      model:
+        input.model && input.model !== ANTIGRAVITY_DEFAULT_MODEL
+          ? resolveAntigravityEffortModel({
+              configOptions,
+              model: input.model,
+              effort: input.effort,
+            })
+          : input.model,
       defaultModel: input.defaultModel,
     });
     const explicit = Boolean(input.model) && input.model !== ANTIGRAVITY_DEFAULT_MODEL;

@@ -1,3 +1,4 @@
+import { getProviderOptionStatedValue } from "@t3tools/shared/model";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ProviderDriverKind,
@@ -267,6 +268,7 @@ export function makeAntigravityAcpAdapterFlavor(
         runtime,
         model:
           modelSelection.model === ANTIGRAVITY_DEFAULT_MODEL ? undefined : modelSelection.model,
+        effort: stringValue(getProviderOptionStatedValue("effort", modelSelection)),
         defaultModel,
         mapError: (cause) => cause,
       });
@@ -336,3 +338,7 @@ export const makeAntigravityAdapterV2 = Effect.fn("makeAntigravityAdapterV2")(fu
       : { continuationRequests: options.continuationRequests }),
   });
 });
+
+function stringValue(value: string | boolean | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
